@@ -462,7 +462,7 @@ execute_udp_test() {
     
     # 解析結果（不管退出碼如何都嘗試解析）
     if [ -f "$output_file" ]; then
-        parse_hping3_results "$output_file"
+        parse_hping3_results "$output_file" "$duration"
         rm -f "$output_file"
     else
         log_error "找不到UDP輸出文件"
@@ -504,7 +504,7 @@ execute_icmp_test() {
     
     # 解析結果（不管退出碼如何都嘗試解析）
     if [ -f "$output_file" ]; then
-        parse_hping3_results "$output_file"
+        parse_hping3_results "$output_file" "$duration"
         rm -f "$output_file"
     else
         log_error "找不到ICMP輸出文件"
@@ -517,6 +517,7 @@ execute_icmp_test() {
 # 解析hping3結果
 parse_hping3_results() {
     local output_file=$1
+    local duration=${2:-30}  # 默認30秒
     
     # 初始化變數
     packets_sent=0
@@ -526,32 +527,54 @@ parse_hping3_results() {
     min_response_time=0
     max_response_time=0
     
+    log_debug "開始解析hping3輸出文件: $output_file (測試時長: ${duration}秒)"
+    
+    # 顯示輸出文件內容以便調試
+    # if [ -f "$output_file" ]; then
+    #     log_debug "hping3輸出內容:"
+    #     while IFS= read -r line; do
+    #         log_debug "  $line"
+    #     done < "$output_file"
+    # fi
+    
     # 從輸出中提取統計信息
     if grep -q "packets transmitted" "$output_file"; then
         # 解析發送和接收的包數
         local stats_line=$(grep "packets transmitted" "$output_file")
-        packets_sent=$(echo "$stats_line" | grep -o '[0-9]\+ packets transmitted' | grep -o '[0-9]\+')
-        packets_received=$(echo "$stats_line" | grep -o '[0-9]\+ received' | grep -o '[0-9]\+')
+        log_debug "統計行: $stats_line"
+        
+        packets_sent=$(echo "$stats_line" | grep -o '[0-9]\+ packets transmitted' | grep -o '[0-9]\+' | head -1)
+        packets_received=$(echo "$stats_line" | grep -o '[0-9]\+ received' | grep -o '[0-9]\+' | head -1)
         
         # 計算丟包率
-        if [ $packets_sent -gt 0 ]; then
-            packet_loss_rate=$(echo "scale=2; 100 * (1 - $packets_received / $packets_sent)" | bc -l 2>/dev/null || echo "0")
+        if [ "$packets_sent" -gt 0 ]; then
+            packet_loss_rate=$(echo "scale=2; 100 * ($packets_sent - $packets_received) / $packets_sent" | bc -l 2>/dev/null || echo "0")
         fi
         
         # 解析響應時間
         if grep -q "round-trip" "$output_file"; then
             local rtt_line=$(grep "round-trip" "$output_file")
-            min_response_time=$(echo "$rtt_line" | grep -o 'min/avg/max/mdev = [0-9.]\+/[0-9.]\+/[0-9.]\+/[0-9.]\+' | cut -d'=' -f2 | cut -d'/' -f1)
-            avg_response_time=$(echo "$rtt_line" | grep -o 'min/avg/max/mdev = [0-9.]\+/[0-9.]\+/[0-9.]\+/[0-9.]\+' | cut -d'=' -f2 | cut -d'/' -f2)
-            max_response_time=$(echo "$rtt_line" | grep -o 'min/avg/max/mdev = [0-9.]\+/[0-9.]\+/[0-9.]\+/[0-9.]\+' | cut -d'=' -f2 | cut -d'/' -f3)
+            log_debug "響應時間行: $rtt_line"
+            
+            # 使用更精確的正則表達式
+            if echo "$rtt_line" | grep -q "min/avg/max"; then
+                min_response_time=$(echo "$rtt_line" | sed 's/.*min\/avg\/max[^=]*= *\([0-9.]*\)\/.*/\1/')
+                avg_response_time=$(echo "$rtt_line" | sed 's/.*min\/avg\/max[^=]*= *[0-9.]*\/\([0-9.]*\)\/.*/\1/')
+                max_response_time=$(echo "$rtt_line" | sed 's/.*min\/avg\/max[^=]*= *[0-9.]*\/[0-9.]*\/\([0-9.]*\).*/\1/')
+            fi
         fi
     else
         # 如果沒有統計信息，嘗試計算收到的回複數量
         packets_received=$(grep -c "bytes from" "$output_file" 2>/dev/null || echo "0")
-        packets_sent=$connection_count
         
-        if [ $packets_sent -gt 0 ]; then
-            packet_loss_rate=$(echo "scale=2; 100 * (1 - $packets_received / $packets_sent)" | bc -l 2>/dev/null || echo "0")
+        # 估算發送的包數（基於測試時間和發送頻率）
+        # hping3 -i u100 表示每100微秒發送一包，即每秒10000包
+        # 但由於可能被限制，我們使用更保守的估算
+        local estimated_rate=1000  # 每秒1000包的保守估算
+        packets_sent=$((estimated_rate * duration))
+        
+        if [ "$packets_sent" -gt 0 ]; then
+            packet_loss_rate=$(echo "scale=2; 100 * ($packets_sent - $packets_received) / $packets_sent" | bc -l 2>/dev/null || echo "0")
         fi
         
         # 嘗試提取響應時間
@@ -565,13 +588,21 @@ parse_hping3_results() {
         fi
     fi
     
-    # 確保數值格式正確
+    # 確保數值格式正確且不為空
     packets_sent=${packets_sent:-0}
     packets_received=${packets_received:-0}
     packet_loss_rate=${packet_loss_rate:-0}
     avg_response_time=${avg_response_time:-0}
     min_response_time=${min_response_time:-0}
     max_response_time=${max_response_time:-0}
+    
+    # 驗證數值格式
+    if ! [[ "$packets_sent" =~ ^[0-9]+$ ]]; then
+        packets_sent=0
+    fi
+    if ! [[ "$packets_received" =~ ^[0-9]+$ ]]; then
+        packets_received=0
+    fi
     
     log_info "測試結果: 發送=$packets_sent, 接收=$packets_received, 丟包率=$packet_loss_rate%, 平均響應時間=${avg_response_time}ms"
 }
