@@ -436,28 +436,31 @@ execute_udp_test() {
     local connection_count=$4
     local duration=$5
     
-    log_info "執行UDP測試: $target_ip:$target_port"
+    log_info "執行UDP測試: $target_ip:$target_port，持續 $duration 秒"
     
     local output_file="/tmp/hping3_udp_output_$$"
-    local cmd="hping3 -2 -p $target_port -d $packet_size -c $connection_count -i u100 $target_ip"
     
-    log_debug "執行UDP命令: $cmd"
+    # 使用持續時間而不是包數量，讓hping3在指定時間內不斷發送
+    # -i u100 表示每100微秒發送一包（每秒10000包）
+    # 使用 timeout 確保在指定時間後停止
+    local cmd="hping3 -2 -p $target_port -d $packet_size -i u100 $target_ip"
+    
+    log_debug "執行UDP命令 (持續${duration}秒): $cmd"
     
     timeout $duration bash -c "$cmd > $output_file 2>&1"
     local exit_code=$?
     
     if [ $exit_code -eq 124 ]; then
-        log_debug "UDP測試按時完成"
-    elif [ $exit_code -ne 0 ]; then
-        log_error "hping3 UDP執行失敗，退出碼: $exit_code"
-        if [ -f "$output_file" ]; then
-            log_error "錯誤輸出: $(cat $output_file)"
-            rm -f "$output_file"
-        fi
-        return 1
+        log_info "UDP測試在 $duration 秒後正常結束"
+    elif [ $exit_code -eq 1 ]; then
+        log_debug "UDP測試完成（無回應是正常的）"
+    elif [ $exit_code -eq 2 ]; then
+        log_debug "UDP測試因SIGINT結束（正常）"
+    else
+        log_warn "hping3 UDP退出碼: $exit_code，繼續處理結果"
     fi
     
-    # 解析結果
+    # 解析結果（不管退出碼如何都嘗試解析）
     if [ -f "$output_file" ]; then
         parse_hping3_results "$output_file"
         rm -f "$output_file"
@@ -476,28 +479,30 @@ execute_icmp_test() {
     local connection_count=$3
     local duration=$4
     
-    log_info "執行ICMP測試: $target_ip"
+    log_info "執行ICMP測試: $target_ip，持續 $duration 秒"
     
     local output_file="/tmp/hping3_icmp_output_$$"
-    local cmd="hping3 -1 -d $packet_size -c $connection_count -i u100 $target_ip"
     
-    log_debug "執行ICMP命令: $cmd"
+    # 使用持續時間而不是包數量
+    # -i u100 表示每100微秒發送一包
+    local cmd="hping3 -1 -d $packet_size -i u100 $target_ip"
+    
+    log_debug "執行ICMP命令 (持續${duration}秒): $cmd"
     
     timeout $duration bash -c "$cmd > $output_file 2>&1"
     local exit_code=$?
     
     if [ $exit_code -eq 124 ]; then
-        log_debug "ICMP測試按時完成"
-    elif [ $exit_code -ne 0 ]; then
-        log_error "hping3 ICMP執行失敗，退出碼: $exit_code"
-        if [ -f "$output_file" ]; then
-            log_error "錯誤輸出: $(cat $output_file)"
-            rm -f "$output_file"
-        fi
-        return 1
+        log_info "ICMP測試在 $duration 秒後正常結束"
+    elif [ $exit_code -eq 1 ]; then
+        log_debug "ICMP測試完成（無回應是正常的）"
+    elif [ $exit_code -eq 2 ]; then
+        log_debug "ICMP測試因SIGINT結束（正常）"
+    else
+        log_warn "hping3 ICMP退出碼: $exit_code，繼續處理結果"
     fi
     
-    # 解析結果
+    # 解析結果（不管退出碼如何都嘗試解析）
     if [ -f "$output_file" ]; then
         parse_hping3_results "$output_file"
         rm -f "$output_file"
