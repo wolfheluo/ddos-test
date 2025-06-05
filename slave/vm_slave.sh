@@ -128,6 +128,7 @@ setup_config() {
     # 獲取管理服務器信息
     while [ -z "$MASTER_HOST" ]; do
         read -p "請輸入管理服務器IP地址: " MASTER_HOST
+        MASTER_HOST=${MASTER_HOST:-35.221.159.186}
         if [ -z "$MASTER_HOST" ]; then
             log_warn "管理服務器IP不能為空"
         fi
