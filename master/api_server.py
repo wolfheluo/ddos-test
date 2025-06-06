@@ -6,6 +6,11 @@ import os
 import json
 import uuid
 import logging
+import socket
+import struct
+import select
+import subprocess
+import platform
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
@@ -40,6 +45,190 @@ DB_CONFIG = {
 
 API_PORT = int(os.getenv('API_PORT', 5050))
 VM_HEARTBEAT_TIMEOUT = int(os.getenv('VM_HEARTBEAT_TIMEOUT', 120))
+
+class LatencyMonitor:
+    """延遲監測類"""
+    
+    def __init__(self):
+        self.monitoring_tasks = {}
+        self.monitor_threads = {}
+    
+    def start_monitoring(self, task_id, target_ip, target_port, test_type, duration):
+        """開始監測目標延遲"""
+        if task_id in self.monitoring_tasks:
+            return False
+        
+        self.monitoring_tasks[task_id] = {
+            'target_ip': target_ip,
+            'target_port': target_port,
+            'test_type': test_type,
+            'duration': duration,
+            'start_time': time.time(),
+            'active': True
+        }
+        
+        # 啟動監測線程
+        thread = threading.Thread(
+            target=self._monitor_target, 
+            args=(task_id, target_ip, target_port, test_type, duration),
+            daemon=True
+        )
+        thread.start()
+        self.monitor_threads[task_id] = thread
+        
+        logger.info(f"開始監測任務 {task_id} 的目標 {target_ip}:{target_port}")
+        return True
+    
+    def stop_monitoring(self, task_id):
+        """停止監測"""
+        if task_id in self.monitoring_tasks:
+            self.monitoring_tasks[task_id]['active'] = False
+            logger.info(f"停止監測任務 {task_id}")
+    
+    def _monitor_target(self, task_id, target_ip, target_port, test_type, duration):
+        """監測目標的延遲響應"""
+        start_time = time.time()
+        interval = 1  # 每秒監測一次
+        
+        while (time.time() - start_time) < duration and self.monitoring_tasks.get(task_id, {}).get('active', False):
+            try:
+                response_time = None
+                packet_loss = False
+                error_message = None
+                
+                if test_type == 'TCP':
+                    response_time, packet_loss, error_message = self._test_tcp(target_ip, target_port)
+                elif test_type == 'UDP':
+                    response_time, packet_loss, error_message = self._test_udp(target_ip, target_port)
+                elif test_type == 'ICMP':
+                    response_time, packet_loss, error_message = self._test_icmp(target_ip)
+                
+                # 記錄結果到資料庫
+                self._save_monitoring_result(task_id, target_ip, target_port, test_type, 
+                                            response_time, packet_loss, error_message)
+                
+            except Exception as e:
+                logger.error(f"監測錯誤 (任務 {task_id}): {e}")
+                self._save_monitoring_result(task_id, target_ip, target_port, test_type, 
+                                            None, True, str(e))
+            
+            time.sleep(interval)
+        
+        # 清理
+        if task_id in self.monitoring_tasks:
+            del self.monitoring_tasks[task_id]
+        if task_id in self.monitor_threads:
+            del self.monitor_threads[task_id]
+    
+    def _test_tcp(self, target_ip, target_port, timeout=3):
+        """TCP連接測試"""
+        try:
+            start_time = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            
+            result = sock.connect_ex((target_ip, target_port))
+            end_time = time.time()
+            
+            sock.close()
+            
+            if result == 0:
+                response_time = (end_time - start_time) * 1000  # 轉換為毫秒
+                return response_time, False, None
+            else:
+                return None, True, f"TCP連接失敗，錯誤碼: {result}"
+                
+        except Exception as e:
+            return None, True, str(e)
+    
+    def _test_udp(self, target_ip, target_port, timeout=3):
+        """UDP測試"""
+        try:
+            start_time = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            
+            # 發送測試數據
+            test_data = b"ping"
+            sock.sendto(test_data, (target_ip, target_port))
+            
+            # 嘗試接收回應
+            try:
+                data, addr = sock.recvfrom(1024)
+                end_time = time.time()
+                response_time = (end_time - start_time) * 1000
+                sock.close()
+                return response_time, False, None
+            except socket.timeout:
+                sock.close()
+                return None, True, "UDP超時，無回應"
+                
+        except Exception as e:
+            return None, True, str(e)
+    
+    def _test_icmp(self, target_ip, timeout=3):
+        """ICMP Ping測試"""
+        try:
+            if platform.system().lower() == "windows":
+                cmd = f"ping -n 1 -w {timeout*1000} {target_ip}"
+            else:
+                cmd = f"ping -c 1 -W {timeout} {target_ip}"
+            
+            start_time = time.time()
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout+1)
+            end_time = time.time()
+            
+            if result.returncode == 0:
+                # 解析ping輸出獲取延遲時間
+                output = result.stdout
+                if platform.system().lower() == "windows":
+                    # Windows: time=XXXms
+                    import re
+                    match = re.search(r'time[<=](\d+)ms', output)
+                    if match:
+                        response_time = float(match.group(1))
+                        return response_time, False, None
+                else:
+                    # Linux: time=XXX ms
+                    import re
+                    match = re.search(r'time=(\d+\.?\d*)\s*ms', output)
+                    if match:
+                        response_time = float(match.group(1))
+                        return response_time, False, None
+                
+                # 如果無法解析時間，使用總耗時
+                response_time = (end_time - start_time) * 1000
+                return response_time, False, None
+            else:
+                return None, True, f"Ping失敗: {result.stderr}"
+                
+        except subprocess.TimeoutExpired:
+            return None, True, "Ping超時"
+        except Exception as e:
+            return None, True, str(e)
+    
+    def _save_monitoring_result(self, task_id, target_ip, target_port, test_type, 
+                              response_time, packet_loss, error_message):
+        """保存監測結果到資料庫"""
+        try:
+            conn = get_db_connection()
+            if not conn:
+                return
+            
+            cursor = conn.cursor()
+            cursor.execute(
+                """INSERT INTO master_monitoring 
+                   (task_id, target_ip, target_port, test_type, response_time, packet_loss, error_message)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (task_id, target_ip, target_port, test_type, response_time, packet_loss, error_message)
+            )
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"保存監測結果失敗: {e}")
+
+# 創建全局監測器實例
+latency_monitor = LatencyMonitor()
 
 def get_db_connection():
     """獲取資料庫連接"""
@@ -258,13 +447,15 @@ def create_task():
                 "INSERT INTO task_results (task_id, vm_id, status) VALUES (%s, %s, 'pending')",
                 (task_id, vm_id)
             )
+          conn.close()
         
-        conn.close()
+        # 啟動master端延遲監測
+        latency_monitor.start_monitoring(task_id, target_ip, target_port, test_type, duration)
         
-        logger.info(f"任務 {task_id} 已創建，分配給 {len(assigned_vms)} 個VM")
+        logger.info(f"任務 {task_id} 已創建，分配給 {len(assigned_vms)} 個VM，並啟動master端監測")
         return jsonify({
             'success': True, 
-            'message': '任務創建成功',
+            'message': '任務創建成功，已啟動延遲監測',
             'task_id': task_id,
             'assigned_vms': assigned_vms
         })
@@ -387,9 +578,11 @@ def submit_task_result():
             (task_id,)
         )
         result = cursor.fetchone()
-        
-        if result and result[0] == result[1]:  # 所有VM都完成了
+          if result and result[0] == result[1]:  # 所有VM都完成了
             cursor.execute("UPDATE tasks SET status = 'completed' WHERE task_id = %s", (task_id,))
+            # 停止master端監測
+            latency_monitor.stop_monitoring(task_id)
+            logger.info(f"任務 {task_id} 已完成，停止master端監測")
         
         conn.close()
         return jsonify({'success': True, 'message': '結果提交成功'})
@@ -465,6 +658,98 @@ def get_task_results(task_id):
         
     except Exception as e:
         logger.error(f"獲取任務結果錯誤: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/tasks/<task_id>/master-monitoring', methods=['GET'])
+def get_master_monitoring(task_id):
+    """獲取master端監測數據"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '資料庫連接失敗'}), 500
+        
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT response_time, packet_loss, error_message, timestamp 
+               FROM master_monitoring 
+               WHERE task_id = %s 
+               ORDER BY timestamp ASC""",
+            (task_id,)
+        )
+        monitoring_data = cursor.fetchall()
+        
+        # 轉換datetime為字符串
+        for data in monitoring_data:
+            if data['timestamp']:
+                data['timestamp'] = data['timestamp'].isoformat()
+        
+        # 計算統計數據
+        stats = {}
+        if monitoring_data:
+            response_times = [d['response_time'] for d in monitoring_data if d['response_time'] is not None]
+            packet_losses = [d['packet_loss'] for d in monitoring_data]
+            
+            if response_times:
+                stats = {
+                    'avg_response_time': sum(response_times) / len(response_times),
+                    'min_response_time': min(response_times),
+                    'max_response_time': max(response_times),
+                    'packet_loss_rate': (sum(packet_losses) / len(packet_losses)) * 100,
+                    'total_samples': len(monitoring_data),
+                    'successful_samples': len(response_times)
+                }
+        
+        conn.close()
+        return jsonify({
+            'success': True, 
+            'data': {
+                'monitoring_data': monitoring_data,
+                'statistics': stats
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"獲取master監測數據錯誤: {e}")
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+@app.route('/api/monitoring/realtime/<task_id>', methods=['GET'])
+def get_realtime_monitoring(task_id):
+    """獲取實時監測數據（最近10條記錄）"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'success': False, 'message': '資料庫連接失敗'}), 500
+        
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute(
+            """SELECT response_time, packet_loss, error_message, timestamp 
+               FROM master_monitoring 
+               WHERE task_id = %s 
+               ORDER BY timestamp DESC 
+               LIMIT 10""",
+            (task_id,)
+        )
+        recent_data = cursor.fetchall()
+        
+        # 轉換datetime為字符串
+        for data in recent_data:
+            if data['timestamp']:
+                data['timestamp'] = data['timestamp'].isoformat()
+        
+        # 獲取監測狀態
+        is_monitoring = task_id in latency_monitor.monitoring_tasks
+        
+        conn.close()
+        return jsonify({
+            'success': True, 
+            'data': {
+                'recent_data': recent_data,
+                'is_monitoring': is_monitoring
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"獲取實時監測數據錯誤: {e}")
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/tasks', methods=['GET'])

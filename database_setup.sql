@@ -75,6 +75,23 @@ CREATE TABLE IF NOT EXISTS vm_tasks (
     INDEX idx_status (status)
 );
 
+-- 創建master監測結果表
+CREATE TABLE IF NOT EXISTS master_monitoring (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    task_id VARCHAR(50) NOT NULL,
+    target_ip VARCHAR(45) NOT NULL,
+    target_port INT NOT NULL,
+    test_type ENUM('TCP', 'UDP', 'ICMP') NOT NULL,
+    response_time DECIMAL(10,3),
+    packet_loss BOOLEAN DEFAULT FALSE,
+    error_message TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(task_id) ON DELETE CASCADE,
+    INDEX idx_task_id (task_id),
+    INDEX idx_timestamp (timestamp),
+    INDEX idx_target (target_ip, target_port)
+);
+
 -- 插入示例數據（可選）
 -- INSERT INTO vms (vm_id, ip_address, hostname) VALUES 
 -- ('vm-001', '192.168.1.100', 'test-vm-001'),
