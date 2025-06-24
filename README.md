@@ -202,6 +202,30 @@ VM_HEARTBEAT_TIMEOUT=120   # VM心跳超時(秒)
 | 連接數 | 總連接/包數量 | 100 | 1-10000 |
 | 持續時間 | 測試持續時間(秒) | 30 | 1-300 |
 
+### 測試指令說明
+
+系統使用`hping3`進行網路測試，具體指令如下：
+
+**TCP測試 (SYN Flood)**:
+```bash
+hping3 -S -p <目標port> --flood --rand-source <目標IP>
+```
+
+**UDP測試 (UDP Flood)**:
+```bash
+hping3 --udp --flood -p <目標port> <目標IP>
+```
+
+**ICMP測試**:
+```bash
+hping3 -1 -d <包大小> -i u100 <目標IP>
+```
+
+> **注意**: TCP和UDP flood測試需要root權限或設置hping3特權。非root用戶可執行：
+> ```bash
+> sudo setcap cap_net_raw+ep /usr/sbin/hping3
+> ```
+
 ## 🔧 管理命令
 
 ### 服務管理

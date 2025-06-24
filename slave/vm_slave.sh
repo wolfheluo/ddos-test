@@ -47,26 +47,11 @@ check_dependencies() {
     local missing_deps=()
     
     # 檢查必要工具
-    for cmd in curl jq; do
+    for cmd in curl jq hping3; do
         if ! command -v $cmd &> /dev/null; then
             missing_deps+=($cmd)
         fi
     done
-    
-    # 檢查網路測試工具（至少需要一個）
-    local network_tools=("hping3" "nc" "telnet")
-    local has_network_tool=false
-    for tool in "${network_tools[@]}"; do
-        if command -v $tool &> /dev/null; then
-            has_network_tool=true
-            break
-        fi
-    done
-    
-    if [ "$has_network_tool" = false ]; then
-        log_warn "缺少網路測試工具，建議安裝: hping3, nc (netcat), 或 telnet"
-        missing_deps+=("hping3")
-    fi
     
     # 檢查bc計算器（用於統計計算）
     if ! command -v bc &> /dev/null; then
@@ -80,14 +65,22 @@ check_dependencies() {
         
         # 根據系統提供安裝建議
         if command -v apt-get &> /dev/null; then
-            log_info "Ubuntu/Debian: sudo apt-get install curl jq hping3 netcat-openbsd telnet bc"
+            log_info "Ubuntu/Debian: sudo apt-get install curl jq hping3 bc"
         elif command -v yum &> /dev/null; then
-            log_info "CentOS/RHEL: sudo yum install curl jq hping3 nc telnet bc"
+            log_info "CentOS/RHEL: sudo yum install curl jq hping3 bc"
         elif command -v dnf &> /dev/null; then
-            log_info "Fedora: sudo dnf install curl jq hping3 nc telnet bc"
+            log_info "Fedora: sudo dnf install curl jq hping3 bc"
         fi
         
+        log_warn "注意: hping3需要root權限才能執行SYN flood和UDP flood測試"
+        
         exit 1
+    fi
+    
+    # 檢查hping3權限
+    if [ "$EUID" -ne 0 ]; then
+        log_warn "當前不是root用戶，hping3可能無法執行某些測試"
+        log_warn "建議使用sudo運行此腳本以獲得完整功能"
     fi
 }
 
@@ -319,146 +312,37 @@ execute_connection_test() {
     esac
 }
 
-# 執行TCP並發連接測試
+# 執行TCP並發連接測試（使用hping3 SYN flood）
 execute_tcp_connection_test() {
     local target_ip=$1
     local target_port=$2
     local connection_count=$3
     local duration=$4
     
-    log_info "建立 $connection_count 個TCP並發連接到 $target_ip:$target_port，持續 $duration 秒"
+    log_info "執行TCP SYN flood測試到 $target_ip:$target_port，持續 $duration 秒"
     
-    local success_count=0
-    local failed_count=0
-    local start_time=$(date +%s.%N)
-    local total_response_time=0
-    local min_time=999999
-    local max_time=0
-    local pids=()
+    local output_file="/tmp/hping3_tcp_output_$$"
     
-    # 創建臨時目錄存放結果
-    local temp_dir="/tmp/tcp_test_$$"
-    mkdir -p "$temp_dir"
+    # 使用hping3進行TCP SYN flood測試
+    # -S: TCP SYN包
+    # -p: 目標端口
+    # --flood: flood模式，盡可能快地發送包
+    # --rand-source: 隨機源IP地址
+    local cmd="hping3 -S -p $target_port --flood --rand-source $target_ip"
     
-    # 建立並發連接
-    for ((i=1; i<=connection_count; i++)); do
-        {
-            local conn_start=$(date +%s.%N)
-            
-            # 使用 nc (netcat) 或 telnet 建立TCP連接並保持
-            if command -v nc &> /dev/null; then
-                timeout $duration nc -v "$target_ip" "$target_port" < /dev/null > "$temp_dir/conn_$i.log" 2>&1
-            elif command -v telnet &> /dev/null; then
-                timeout $duration bash -c "echo '' | telnet $target_ip $target_port" > "$temp_dir/conn_$i.log" 2>&1
-            else
-                # 使用 bash 內建的網路功能
-                timeout $duration bash -c "exec 3<>/dev/tcp/$target_ip/$target_port; sleep $duration" > "$temp_dir/conn_$i.log" 2>&1
-            fi
-            
-            local conn_end=$(date +%s.%N)
-            local conn_time=$(echo "$conn_end - $conn_start" | bc -l 2>/dev/null || echo "0")
-            echo "$conn_time" > "$temp_dir/time_$i"
-            echo "$?" > "$temp_dir/exit_$i"
-        } &
-        pids+=($!)
-        
-        # 稍微延遲避免瞬間建立太多連接
-        sleep 0.01
-    done
-    
-    log_info "已啟動 $connection_count 個並發連接，等待測試完成..."
-    
-    # 等待所有連接完成
-    for pid in "${pids[@]}"; do
-        wait $pid
-    done
-    
-    # 統計結果
-    for ((i=1; i<=connection_count; i++)); do
-        if [ -f "$temp_dir/exit_$i" ]; then
-            local exit_code=$(cat "$temp_dir/exit_$i")
-            if [ "$exit_code" -eq 0 ] || [ "$exit_code" -eq 124 ]; then
-                # 成功或超時（正常情況）
-                success_count=$((success_count + 1))
-                
-                if [ -f "$temp_dir/time_$i" ]; then
-                    local conn_time=$(cat "$temp_dir/time_$i")
-                    total_response_time=$(echo "$total_response_time + $conn_time" | bc -l 2>/dev/null || echo "$total_response_time")
-                    
-                    # 更新最小/最大時間
-                    if (( $(echo "$conn_time < $min_time" | bc -l 2>/dev/null || echo "0") )); then
-                        min_time=$conn_time
-                    fi
-                    if (( $(echo "$conn_time > $max_time" | bc -l 2>/dev/null || echo "0") )); then
-                        max_time=$conn_time
-                    fi
-                fi
-            else
-                failed_count=$((failed_count + 1))
-            fi
-        else
-            failed_count=$((failed_count + 1))
-        fi
-    done
-    
-    # 清理臨時文件
-    rm -rf "$temp_dir"
-    
-    # 計算統計數據
-    packets_sent=$connection_count
-    packets_received=$success_count
-    
-    if [ $packets_sent -gt 0 ]; then
-        packet_loss_rate=$(echo "scale=2; 100 * $failed_count / $packets_sent" | bc -l 2>/dev/null || echo "0")
-    else
-        packet_loss_rate=0
-    fi
-    
-    if [ $success_count -gt 0 ]; then
-        avg_response_time=$(echo "scale=3; 1000 * $total_response_time / $success_count" | bc -l 2>/dev/null || echo "0")
-        min_response_time=$(echo "scale=3; 1000 * $min_time" | bc -l 2>/dev/null || echo "0")
-        max_response_time=$(echo "scale=3; 1000 * $max_time" | bc -l 2>/dev/null || echo "0")
-    else
-        avg_response_time=0
-        min_response_time=0
-        max_response_time=0
-    fi
-    
-    log_info "TCP連接測試結果: 成功=$success_count, 失敗=$failed_count, 成功率=$(echo "scale=1; 100 * $success_count / $packets_sent" | bc -l 2>/dev/null || echo "0")%"
-    
-    return 0
-}
-
-# 執行UDP測試（使用hping3）
-execute_udp_test() {
-    local target_ip=$1
-    local target_port=$2
-    local packet_size=$3
-    local connection_count=$4
-    local duration=$5
-    
-    log_info "執行UDP測試: $target_ip:$target_port，持續 $duration 秒"
-    
-    local output_file="/tmp/hping3_udp_output_$$"
-    
-    # 使用持續時間而不是包數量，讓hping3在指定時間內不斷發送
-    # -i u100 表示每100微秒發送一包（每秒10000包）
-    # 使用 timeout 確保在指定時間後停止
-    local cmd="hping3 -2 -p $target_port -d $packet_size -i u100 $target_ip"
-    
-    log_debug "執行UDP命令 (持續${duration}秒): $cmd"
+    log_debug "執行TCP SYN flood命令 (持續${duration}秒): $cmd"
     
     timeout $duration bash -c "$cmd > $output_file 2>&1"
     local exit_code=$?
     
     if [ $exit_code -eq 124 ]; then
-        log_info "UDP測試在 $duration 秒後正常結束"
+        log_info "TCP SYN flood測試在 $duration 秒後正常結束"
     elif [ $exit_code -eq 1 ]; then
-        log_debug "UDP測試完成（無回應是正常的）"
+        log_debug "TCP SYN flood測試完成（無回應是正常的）"
     elif [ $exit_code -eq 2 ]; then
-        log_debug "UDP測試因SIGINT結束（正常）"
+        log_debug "TCP SYN flood測試因SIGINT結束（正常）"
     else
-        log_warn "hping3 UDP退出碼: $exit_code，繼續處理結果"
+        log_warn "hping3 TCP SYN flood退出碼: $exit_code，繼續處理結果"
     fi
     
     # 解析結果（不管退出碼如何都嘗試解析）
@@ -466,7 +350,52 @@ execute_udp_test() {
         parse_hping3_results "$output_file" "$duration"
         rm -f "$output_file"
     else
-        log_error "找不到UDP輸出文件"
+        log_error "找不到TCP SYN flood輸出文件"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 執行UDP測試（使用hping3 UDP flood）
+execute_udp_test() {
+    local target_ip=$1
+    local target_port=$2
+    local packet_size=$3
+    local connection_count=$4
+    local duration=$5
+    
+    log_info "執行UDP flood測試: $target_ip:$target_port，持續 $duration 秒"
+    
+    local output_file="/tmp/hping3_udp_output_$$"
+    
+    # 使用hping3進行UDP flood測試
+    # --udp: UDP模式
+    # --flood: flood模式，盡可能快地發送包
+    # -p: 目標端口
+    local cmd="hping3 --udp --flood -p $target_port $target_ip"
+    
+    log_debug "執行UDP flood命令 (持續${duration}秒): $cmd"
+    
+    timeout $duration bash -c "$cmd > $output_file 2>&1"
+    local exit_code=$?
+    
+    if [ $exit_code -eq 124 ]; then
+        log_info "UDP flood測試在 $duration 秒後正常結束"
+    elif [ $exit_code -eq 1 ]; then
+        log_debug "UDP flood測試完成（無回應是正常的）"
+    elif [ $exit_code -eq 2 ]; then
+        log_debug "UDP flood測試因SIGINT結束（正常）"
+    else
+        log_warn "hping3 UDP flood退出碼: $exit_code，繼續處理結果"
+    fi
+    
+    # 解析結果（不管退出碼如何都嘗試解析）
+    if [ -f "$output_file" ]; then
+        parse_hping3_results "$output_file" "$duration"
+        rm -f "$output_file"
+    else
+        log_error "找不到UDP flood輸出文件"
         return 1
     fi
     
@@ -515,7 +444,7 @@ execute_icmp_test() {
     return 0
 }
 
-# 解析hping3結果
+# 解析hping3結果（支援flood模式）
 parse_hping3_results() {
     local output_file=$1
     local duration=${2:-30}  # 默認30秒
@@ -565,27 +494,52 @@ parse_hping3_results() {
             fi
         fi
     else
-        # 如果沒有統計信息，嘗試計算收到的回複數量
+        # Flood模式特殊處理
+        # 檢查是否是flood模式（通常沒有詳細統計）
+        log_debug "可能是flood模式，嘗試計算發送包數"
+        
+        # 計算收到的回復數量
         packets_received=$(grep -c "bytes from" "$output_file" 2>/dev/null || echo "0")
         
-        # 估算發送的包數（基於測試時間和發送頻率）
-        # hping3 -i u100 表示每100微秒發送一包，即每秒10000包
-        # 但由於可能被限制，我們使用更保守的估算
-        local estimated_rate=1000  # 每秒1000包的保守估算
-        packets_sent=$((estimated_rate * duration))
+        # 嘗試從輸出中解析發送的包數
+        if grep -q "HPING" "$output_file"; then
+            # 計算HPING行數作為發送包數的近似值
+            local hping_lines=$(grep -c "HPING" "$output_file" 2>/dev/null || echo "0")
+            if [ "$hping_lines" -gt 0 ]; then
+                packets_sent=$hping_lines
+            fi
+        fi
         
+        # 如果仍然無法獲取發送包數，根據flood模式特性估算
+        if [ "$packets_sent" -eq 0 ]; then
+            # Flood模式通常每秒可發送數千到數萬包，這裡用保守估算
+            # 考慮系統性能和網路限制，每秒約1000-10000包
+            local estimated_rate=5000  # 每秒5000包的中等估算
+            packets_sent=$((estimated_rate * duration))
+            log_debug "使用估算的發送包數: $packets_sent (基於 ${estimated_rate}包/秒 × ${duration}秒)"
+        fi
+        
+        # 計算丟包率
         if [ "$packets_sent" -gt 0 ]; then
             packet_loss_rate=$(echo "scale=2; 100 * ($packets_sent - $packets_received) / $packets_sent" | bc -l 2>/dev/null || echo "0")
         fi
         
-        # 嘗試提取響應時間
+        # 嘗試提取響應時間（如果有的話）
         if grep -q "time=" "$output_file"; then
             local times=$(grep -o 'time=[0-9.]\+' "$output_file" | grep -o '[0-9.]\+')
             if [ -n "$times" ]; then
-                avg_response_time=$(echo "$times" | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
-                min_response_time=$(echo "$times" | sort -n | head -1)
-                max_response_time=$(echo "$times" | sort -n | tail -1)
+                local time_count=$(echo "$times" | wc -l)
+                if [ "$time_count" -gt 0 ]; then
+                    avg_response_time=$(echo "$times" | awk '{sum+=$1; count++} END {if(count>0) print sum/count; else print 0}')
+                    min_response_time=$(echo "$times" | sort -n | head -1)
+                    max_response_time=$(echo "$times" | sort -n | tail -1)
+                fi
             fi
+        fi
+        
+        # 如果是flood模式且沒有收到回復，這是正常的
+        if [ "$packets_received" -eq 0 ]; then
+            log_debug "Flood模式測試完成，未收到回復（這在flood測試中是正常的）"
         fi
     fi
     
