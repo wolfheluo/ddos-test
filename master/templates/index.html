@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分散式網路測試管理系統</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .test-card {
+            transition: transform 0.2s;
+            cursor: pointer;
+        }
+        .test-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online { background-color: #28a745; }
+        .status-offline { background-color: #dc3545; }
+        .test-button {
+            margin: 10px;
+            min-width: 150px;
+            height: 80px;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .bandwidth-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+        }
+        .session-section {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+        }
+        .stats-card {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body class="bg-light">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-network-wired me-2"></i>
+                分散式網路測試管理系統
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/dashboard">
+                    <i class="fas fa-chart-bar me-1"></i>儀表板
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <!-- 系統狀態 -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="stats-card text-center">
+                    <h3 id="online-slaves">0</h3>
+                    <p class="mb-0">在線VM數量</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card text-center">
+                    <h3 id="total-tasks">0</h3>
+                    <p class="mb-0">總任務數</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card text-center">
+                    <h3 id="running-tasks">0</h3>
+                    <p class="mb-0">執行中任務</p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card text-center">
+                    <h3 id="completed-tasks">0</h3>
+                    <p class="mb-0">完成任務</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 目標設定 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5><i class="fas fa-bullseye me-2"></i>目標設定</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <label for="target-ip" class="form-label">目標IP</label>
+                        <input type="text" class="form-control" id="target-ip" placeholder="192.168.1.100" value="192.168.50.91">
+                    </div>
+                    <div class="col-md-6">
+                        <label for="target-port" class="form-label">目標端口</label>
+                        <input type="number" class="form-control" id="target-port" placeholder="80" value="5050">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 流量測試 -->
+        <div class="bandwidth-section">
+            <h4><i class="fas fa-tachometer-alt me-2"></i>流量測試 - UDP (10分鐘)</h4>
+            <p class="mb-3">選擇測試的帶寬級別，使用UDP協議進行流量測試，系統會自動分配給所有在線的VM進行測試</p>
+            <div class="row">
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startBandwidthTest('50MB')">
+                        <i class="fas fa-rocket"></i><br>50 MB/s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startBandwidthTest('100MB')">
+                        <i class="fas fa-fire"></i><br>100 MB/s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startBandwidthTest('300MB')">
+                        <i class="fas fa-bolt"></i><br>300 MB/s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startBandwidthTest('500MB')">
+                        <i class="fas fa-meteor"></i><br>500 MB/s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startBandwidthTest('1G')">
+                        <i class="fas fa-satellite"></i><br>1 GB/s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startBandwidthTest('3G')">
+                        <i class="fas fa-space-shuttle"></i><br>3 GB/s
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Session測試 -->
+        <div class="session-section">
+            <h4><i class="fas fa-users me-2"></i>Session測試 - TCP SYN Flood (10分鐘)</h4>
+            <p class="mb-3">使用 SYN Flood 攻擊模式測試服務器的並發處理能力</p>
+            
+            <div class="row">
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startSessionTest(500)">
+                        <i class="fas fa-user"></i><br>500 /s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startSessionTest(1000)">
+                        <i class="fas fa-user-friends"></i><br>1000 /s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startSessionTest(3000)">
+                        <i class="fas fa-users"></i><br>3000 /s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startSessionTest(5000)">
+                        <i class="fas fa-user-shield"></i><br>5000 /s
+                    </button>
+                </div>
+                <div class="col-lg-2 col-md-4 col-sm-6">
+                    <button class="btn btn-outline-light test-button w-100" onclick="startSessionTest(8000)">
+                        <i class="fas fa-user-ninja"></i><br>8000 /s
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 最近任務 -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5><i class="fas fa-history me-2"></i>最近任務</h5>
+                <button class="btn btn-outline-primary btn-sm" onclick="refreshTasks()">
+                    <i class="fas fa-sync-alt"></i> 刷新
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>任務ID</th>
+                                <th>類型</th>
+                                <th>目標</th>
+                                <th>參數</th>
+                                <th>狀態</th>
+                                <th>創建時間</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tasks-table">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 即時監控 -->
+        <div class="card mb-4" id="realtime-monitor" style="display: none;">
+            <div class="card-header">
+                <h5><i class="fas fa-chart-line me-2"></i>即時監控</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <canvas id="responseTimeChart" height="200"></canvas>
+                    </div>
+                    <div class="col-md-6">
+                        <canvas id="connectionChart" height="200"></canvas>
+                    </div>
+                </div>
+                <div class="row mt-3">
+                    <div class="col-md-12">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <span class="badge bg-info">當前響應時間: <span id="current-response-time">0</span>ms</span>
+                                <span class="badge bg-success ms-2">當前連接數: <span id="current-connections">0</span></span>
+                            </div>
+                            <button class="btn btn-danger" onclick="stopCurrentTask()" id="stop-task-btn">
+                                <i class="fas fa-stop"></i> 停止測試
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 在線VM列表 -->
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-server me-2"></i>在線VM列表</h5>
+            </div>
+            <div class="card-body">
+                <div id="slaves-list">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 結果模態框 -->
+    <div class="modal fade" id="resultModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">測試結果</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="result-content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // 全局變量
+        let slaves = {};
+        let tasks = [];
+        let currentTaskId = null;
+        let responseTimeChart = null;
+        let connectionChart = null;
+        let realtimeInterval = null;
+
+        // 頁面加載完成後初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshSlaves();
+            refreshTasks();
+            
+            // 每5秒刷新一次數據
+            setInterval(refreshSlaves, 5000);
+            setInterval(refreshTasks, 10000);
+        });
+
+        // 刷新VM列表
+        async function refreshSlaves() {
+            try {
+                const response = await fetch('/api/vms');
+                const result = await response.json();
+                
+                if (result.success) {
+                    // 转换数据格式以适配模板
+                    slaves = {};
+                    result.data.forEach(vm => {
+                        slaves[vm.vm_id] = {
+                            status: vm.status,
+                            ip: vm.ip_address,
+                            port: 'N/A', // API中没有单独的端口字段
+                            last_heartbeat: vm.last_heartbeat
+                        };
+                    });
+                }
+                
+                updateSlavesDisplay();
+                updateStats();
+            } catch (error) {
+                console.error('Error fetching VMs:', error);
+            }
+        }
+
+        // 更新slaves顯示
+        function updateSlavesDisplay() {
+            const container = document.getElementById('slaves-list');
+            
+            if (Object.keys(slaves).length === 0) {
+                container.innerHTML = '<p class="text-muted">目前沒有在線的VM</p>';
+                return;
+            }
+
+            let html = '<div class="row">';
+            for (const [slaveId, info] of Object.entries(slaves)) {
+                const statusClass = info.status === 'online' ? 'status-online' : 'status-offline';
+                const cardClass = info.status === 'online' ? 'border-success' : 'border-danger';
+                
+                html += `
+                    <div class="col-md-4 mb-3">
+                        <div class="card ${cardClass}">
+                            <div class="card-body">
+                                <h6 class="card-title">
+                                    <span class="status-indicator ${statusClass}"></span>
+                                    ${slaveId}
+                                </h6>
+                                <p class="card-text small">
+                                    <i class="fas fa-network-wired"></i> ${info.ip}<br>
+                                    <i class="fas fa-clock"></i> ${new Date(info.last_heartbeat).toLocaleString()}
+                                </p>
+                                <span class="badge ${info.status === 'online' ? 'bg-success' : 'bg-danger'}">
+                                    ${info.status}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            html += '</div>';
+            
+            container.innerHTML = html;
+        }
+
+        // 更新統計信息
+        function updateStats() {
+            const onlineCount = Object.values(slaves).filter(s => s.status === 'online').length;
+            document.getElementById('online-slaves').textContent = onlineCount;
+            
+            const totalTasks = tasks.length;
+            const runningTasks = tasks.filter(t => t.status === 'running').length;
+            const completedTasks = tasks.filter(t => t.status === 'completed').length;
+            
+            document.getElementById('total-tasks').textContent = totalTasks;
+            document.getElementById('running-tasks').textContent = runningTasks;
+            document.getElementById('completed-tasks').textContent = completedTasks;
+        }
+
+        // 刷新任务列表
+        async function refreshTasks() {
+            try {
+                const response = await fetch('/api/tasks');
+                const result = await response.json();
+                
+                if (result.success) {
+                    tasks = result.data;
+                }
+                
+                updateTasksDisplay();
+                updateStats();
+            } catch (error) {
+                console.error('Error fetching tasks:', error);
+            }
+        }
+
+        // 更新任務顯示
+        function updateTasksDisplay() {
+            const tbody = document.getElementById('tasks-table');
+            
+            if (tasks.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暫無任務記錄</td></tr>';
+                return;
+            }
+
+            let html = '';
+            for (const task of tasks) {
+                const statusBadge = getStatusBadge(task.status);
+                // 显示测试参数
+                const params = `${task.test_type} (${task.duration || 600}秒, ${task.connection_count}连接)`;
+                
+                html += `
+                    <tr>
+                        <td><small>${task.task_id.substring(0, 8)}...</small></td>
+                        <td><span class="badge bg-info">hping3</span></td>
+                        <td>${task.target_ip}:${task.target_port}</td>
+                        <td>${params}</td>
+                        <td>${statusBadge}</td>
+                        <td><small>${new Date(task.created_at).toLocaleString()}</small></td>
+                        <td>
+                            ${task.status === 'completed' || task.status === 'stopped' ? 
+                                `<button class="btn btn-sm btn-outline-primary" onclick="showResults('${task.task_id}')">
+                                    <i class="fas fa-chart-bar"></i> 結果
+                                </button>` : 
+                                task.status === 'running' ?
+                                `<div class="btn-group" role="group">
+                                    <button class="btn btn-sm btn-outline-info" onclick="showRealtimeMonitor('${task.task_id}')">
+                                        <i class="fas fa-eye"></i> 監控
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="stopTask('${task.task_id}')">
+                                        <i class="fas fa-stop"></i> 停止
+                                    </button>
+                                </div>` :
+                                '<span class="text-muted">等待中</span>'
+                            }
+                        </td>
+                    </tr>
+                `;
+            }
+            
+            tbody.innerHTML = html;
+        }
+
+        // 獲取狀態徽章
+        function getStatusBadge(status) {
+            const badges = {
+                'pending': '<span class="badge bg-warning">等待中</span>',
+                'running': '<span class="badge bg-primary">執行中</span>',
+                'completed': '<span class="badge bg-success">已完成</span>',
+                'stopped': '<span class="badge bg-warning">已停止</span>',
+                'failed': '<span class="badge bg-danger">失敗</span>'
+            };
+            return badges[status] || '<span class="badge bg-secondary">未知</span>';
+        }
+
+        // 根据带宽计算包大小
+        function getBandwidthPacketSize(bandwidth) {
+            return 1024; // 使用固定的1KB包大小
+        }
+
+        // 根据带宽计算连接数
+        function getBandwidthConnectionCount(bandwidth) {
+            const multipliers = {
+                '50MB': 50,
+                '100MB': 100,
+                '300MB': 300,
+                '500MB': 500,
+                '1G': 1000,
+                '3G': 3000
+            };
+            return multipliers[bandwidth] || 100;
+        }
+
+        // 開始帶寬測試
+        async function startBandwidthTest(bandwidth) {
+            const targetIp = document.getElementById('target-ip').value;
+            const targetPort = document.getElementById('target-port').value;
+
+            if (!targetIp) {
+                alert('請輸入目標IP');
+                return;
+            }
+
+            const onlineCount = Object.values(slaves).filter(s => s.status === 'online').length;
+            if (onlineCount === 0) {
+                alert('沒有可用的在線VM');
+                return;
+            }
+
+            if (!confirm(`確定要開始 ${bandwidth}/s 的流量測試嗎？\n將使用 ${onlineCount} 個VM進行UDP流量測試。`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/tasks/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        target_ip: targetIp,
+                        target_port: parseInt(targetPort),
+                        test_type: 'UDP',
+                        packet_size: getBandwidthPacketSize(bandwidth),
+                        connection_count: getBandwidthConnectionCount(bandwidth),
+                        duration: 600  // 10分钟
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    alert(`流量測試已開始！\n任務ID: ${result.task_id.substring(0, 8)}...`);
+                    refreshTasks();
+                } else {
+                    alert('測試啟動失敗: ' + result.message);
+                }
+            } catch (error) {
+                alert('網路錯誤: ' + error.message);
+            }
+        }
+
+        // 開始Session測試
+        async function startSessionTest(sessions) {
+            const targetIp = document.getElementById('target-ip').value;
+            const targetPort = document.getElementById('target-port').value;
+
+            if (!targetIp) {
+                alert('請輸入目標IP');
+                return;
+            }
+
+            const onlineCount = Object.values(slaves).filter(s => s.status === 'online').length;
+            if (onlineCount === 0) {
+                alert('沒有可用的在線VM');
+                return;
+            }
+
+            if (!confirm(`確定要開始 ${sessions} sessions/s 的 SYN Flood 測試嗎？\n將使用 ${onlineCount} 個VM進行TCP SYN Flood測試。`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/tasks/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        target_ip: targetIp,
+                        target_port: parseInt(targetPort),
+                        test_type: 'TCP',
+                        packet_size: 64,
+                        connection_count: sessions,
+                        duration: 600  // 10分钟
+                    })
+                });
+
+                const result = await response.json();
+                if (result.success) {
+                    alert(`SYN Flood Session測試已開始！\n任務ID: ${result.task_id.substring(0, 8)}...`);
+                    refreshTasks();
+                } else {
+                    alert('測試啟動失敗: ' + result.message);
+                }
+            } catch (error) {
+                alert('網路錯誤: ' + error.message);
+            }
+        }
+
+        // 顯示測試結果
+        async function showResults(taskId) {
+            try {
+                const response = await fetch(`/api/tasks/${taskId}/results`);
+                const result = await response.json();
+                
+                if (result.success) {
+                    const results = result.data;
+                    let html = '<div class="row">';
+                    
+                    if (results.length === 0) {
+                        html += '<p class="text-muted">暫無結果數據</p>';
+                    } else {
+                        for (const resultData of results) {
+                            html += `
+                                <div class="col-md-6 mb-3">
+                                    <div class="card">
+                                        <div class="card-header">
+                                            <h6>VM: ${resultData.vm_id}</h6>
+                                        </div>
+                                        <div class="card-body">
+                                            <div class="row">
+                                                <div class="col-6">
+                                                    <small class="text-muted">發送包數</small>
+                                                    <div class="h5 text-info">${resultData.packets_sent || 0}</div>
+                                                </div>
+                                                <div class="col-6">
+                                                    <small class="text-muted">接收包數</small>
+                                                    <div class="h5 text-success">${resultData.packets_received || 0}</div>
+                                                </div>
+                                            </div>
+                                            <div class="row mt-2">
+                                                <div class="col-6">
+                                                    <small class="text-muted">丟包率</small>
+                                                    <div class="h6">${resultData.packet_loss_rate || 0}%</div>
+                                                </div>
+                                                <div class="col-6">
+                                                    <small class="text-muted">平均響應時間</small>
+                                                    <div class="h6">${resultData.avg_response_time || 0}ms</div>
+                                                </div>
+                                            </div>
+                                            ${resultData.error_message ? `
+                                                <div class="mt-2">
+                                                    <small class="text-muted">錯誤信息</small>
+                                                    <div class="text-danger small">${resultData.error_message}</div>
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }
+                    }
+                    
+                    html += '</div>';
+                    
+                    document.getElementById('result-content').innerHTML = html;
+                    new bootstrap.Modal(document.getElementById('resultModal')).show();
+                } else {
+                    alert('獲取結果失敗: ' + result.message);
+                }
+                
+            } catch (error) {
+                alert('獲取結果失敗: ' + error.message);
+            }
+        }
+
+        // 初始化即時監控圖表
+        function initRealtimeCharts() {
+            const responseTimeCtx = document.getElementById('responseTimeChart').getContext('2d');
+            responseTimeChart = new Chart(responseTimeCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '響應時間 (ms)',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '響應時間 (ms)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: '即時響應時間'
+                        }
+                    }
+                }
+            });
+
+            const connectionCtx = document.getElementById('connectionChart').getContext('2d');
+            connectionChart = new Chart(connectionCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '連接數',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '連接數'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: '即時連接數'
+                        }
+                    }
+                }
+            });
+        }
+
+        // 顯示即時監控
+        function showRealtimeMonitor(taskId) {
+            currentTaskId = taskId;
+            document.getElementById('realtime-monitor').style.display = 'block';
+            
+            // 初始化圖表（如果還沒初始化）
+            if (!responseTimeChart) {
+                initRealtimeCharts();
+            }
+            
+            // 清空之前的數據
+            responseTimeChart.data.labels = [];
+            responseTimeChart.data.datasets[0].data = [];
+            connectionChart.data.labels = [];
+            connectionChart.data.datasets[0].data = [];
+            responseTimeChart.update();
+            connectionChart.update();
+            
+            // 開始即時更新
+            startRealtimeUpdate(taskId);
+            
+            // 滾動到監控區域
+            document.getElementById('realtime-monitor').scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // 開始即時更新
+        function startRealtimeUpdate(taskId) {
+            if (realtimeInterval) {
+                clearInterval(realtimeInterval);
+            }
+            
+            realtimeInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/tasks/${taskId}/realtime_stats`);
+                    const data = await response.json();
+                    
+                    if (data.stats && data.stats.timestamps.length > 0) {
+                        const stats = data.stats;
+                        const latestIndex = stats.timestamps.length - 1;
+                        
+                        // 更新當前值顯示
+                        document.getElementById('current-response-time').textContent = 
+                            stats.response_times[latestIndex] || '0';
+                        document.getElementById('current-connections').textContent = 
+                            stats.connection_counts[latestIndex] || '0';
+                        
+                        // 更新圖表
+                        responseTimeChart.data.labels = stats.timestamps;
+                        responseTimeChart.data.datasets[0].data = stats.response_times;
+                        connectionChart.data.labels = stats.timestamps;
+                        connectionChart.data.datasets[0].data = stats.connection_counts;
+                        
+                        responseTimeChart.update('none');
+                        connectionChart.update('none');
+                    }
+                } catch (error) {
+                    console.error('Error fetching realtime stats:', error);
+                }
+            }, 1000); // 每秒更新一次
+        }
+
+        // 停止當前任務
+        function stopCurrentTask() {
+            if (currentTaskId) {
+                stopTask(currentTaskId);
+            }
+        }
+
+        // 停止指定任務
+        async function stopTask(taskId) {
+            if (!confirm('確定要停止這個測試任務嗎？')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/api/tasks/${taskId}/stop`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('任務已停止');
+                    
+                    // 停止即時更新
+                    if (realtimeInterval) {
+                        clearInterval(realtimeInterval);
+                        realtimeInterval = null;
+                    }
+                    
+                    // 隱藏監控面板
+                    document.getElementById('realtime-monitor').style.display = 'none';
+                    currentTaskId = null;
+                    
+                    // 刷新任務列表
+                    refreshTasks();
+                } else {
+                    alert('停止任務失敗: ' + (result.error || '未知錯誤'));
+                }
+            } catch (error) {
+                alert('網路錯誤: ' + error.message);
+            }
+        }
+
+        // 頁面加載完成後初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshSlaves();
+            refreshTasks();
+            
+            // 每5秒刷新一次數據
+            setInterval(refreshSlaves, 5000);
+            setInterval(refreshTasks, 10000);
+            
+            // 監聽頁面卸載，清理定時器
+            window.addEventListener('beforeunload', function() {
+                if (realtimeInterval) {
+                    clearInterval(realtimeInterval);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

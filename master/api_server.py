@@ -7,7 +7,7 @@ import json
 import uuid
 import logging
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 import mysql.connector
 from mysql.connector import Error
@@ -25,12 +25,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+app = Flask(__name__, template_folder='templates')
 CORS(app)
 
 # 資料庫配置
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'localhost'),
+    'host': os.getenv('DB_HOST', '165.154.226.131'),
     'user': os.getenv('DB_USER', 'wolfheluo'),
     'password': os.getenv('DB_PASSWORD', 'nasa0411'),
     'database': os.getenv('DB_NAME', 'ddos_system'),
@@ -542,407 +542,46 @@ def get_stats():
 @app.route('/')
 def index():
     """主頁面"""
-    return render_template_string('''
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>分散式網路測試系統</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
-        .card { background: white; border-radius: 10px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; color: #333; }
-        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 14px; }
-        button { background: #3498db; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; }
-        button:hover { background: #2980b9; }
-        button:disabled { background: #bdc3c7; cursor: not-allowed; }
-        .btn-danger { background: #e74c3c; }
-        .btn-danger:hover { background: #c0392b; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .status { padding: 5px 10px; border-radius: 15px; font-size: 12px; font-weight: bold; }
-        .status.online { background: #27ae60; color: white; }
-        .status.offline { background: #e74c3c; color: white; }
-        .status.pending { background: #f39c12; color: white; }
-        .status.running { background: #3498db; color: white; }
-        .status.completed { background: #27ae60; color: white; }
-        .status.failed { background: #e74c3c; color: white; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f8f9fa; font-weight: bold; }
-        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px; text-align: center; }
-        .stat-number { font-size: 2em; font-weight: bold; margin-bottom: 5px; }
-        .refresh-btn { float: right; background: #95a5a6; }
-        .refresh-btn:hover { background: #7f8c8d; }
-        .loading { text-align: center; padding: 20px; color: #666; }
-        .error { background: #e74c3c; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; }
-        .success { background: #27ae60; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🚀 分散式網路測試系統</h1>
-            <p>管理和監控分散式網路測試任務</p>
-        </div>
+    return render_template('index.html')
 
-        <!-- 系統統計 -->
-        <div class="card">
-            <h2>📊 系統統計</h2>
-            <div class="stats" id="stats">
-                <div class="loading">載入統計數據中...</div>
-            </div>
-        </div>
+@app.route('/dashboard')
+def dashboard():
+    """儀表板頁面"""
+    return render_template('dashboard.html')
 
-        <div class="grid">
-            <!-- 創建測試任務 -->
-            <div class="card">
-                <h2>⚡ 創建測試任務</h2>
-                <form id="taskForm">
-                    <div class="form-group">
-                        <label for="targetIp">目標IP地址:</label>
-                        <input type="text" id="targetIp" name="target_ip" placeholder="例: 8.8.8.8" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="targetPort">目標端口:</label>
-                        <input type="number" id="targetPort" name="target_port" value="80" min="1" max="65535" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="testType">測試類型:</label>
-                        <select id="testType" name="test_type" required>
-                            <option value="TCP">TCP</option>
-                            <option value="UDP">UDP</option>
-                            <option value="ICMP">ICMP</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="packetSize">數據包大小 (bytes):</label>
-                        <input type="number" id="packetSize" name="packet_size" value="64" min="1" max="65507">
-                        <small style="color: #666; font-size: 12px;">僅適用於UDP和ICMP測試</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="connectionCount">並發連接數 (同時建立的session數):</label>
-                        <input type="number" id="connectionCount" name="connection_count" value="100" min="1" max="10000">
-                        <small style="color: #666; font-size: 12px;">測試目標服務器的連接承載能力，每個連接將保持活躍直到測試結束</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="duration">持續時間 (秒):</label>
-                        <input type="number" id="duration" name="duration" value="30" min="1" max="300">
-                        <small style="color: #666; font-size: 12px;">連接保持活躍的時間</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="assignedVms">指定VM (留空使用所有在線VM):</label>
-                        <textarea id="assignedVms" name="assigned_vms" placeholder="一行一個VM ID，例:&#10;vm-001&#10;vm-002"></textarea>
-                    </div>
-                    
-                    <button type="submit" id="startTestBtn">🎯 開始測試</button>
-                </form>
-            </div>
-
-            <!-- 在線VM -->
-            <div class="card">
-                <h2>💻 在線VM 
-                    <button class="refresh-btn" onclick="loadVms()">🔄 刷新</button>
-                </h2>
-                <div id="vmsList">
-                    <div class="loading">載入VM列表中...</div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 最近任務 -->
-        <div class="card">
-            <h2>📋 最近任務
-                <button class="refresh-btn" onclick="loadTasks()">🔄 刷新</button>
-            </h2>
-            <div id="tasksList">
-                <div class="loading">載入任務列表中...</div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // 全局變數
-        let refreshIntervals = [];
-
-        // 頁面載入時初始化
-        document.addEventListener('DOMContentLoaded', function() {
-            loadStats();
-            loadVms();
-            loadTasks();
-            
-            // 設置自動刷新
-            refreshIntervals.push(setInterval(loadStats, 30000));
-            refreshIntervals.push(setInterval(loadVms, 10000));
-            refreshIntervals.push(setInterval(loadTasks, 15000));
-            
-            // 綁定表單提交事件
-            document.getElementById('taskForm').addEventListener('submit', createTask);
-        });
-
-        // 載入統計數據
-        async function loadStats() {
-            try {
-                const response = await fetch('/api/stats');
-                const result = await response.json();
-                
-                if (result.success) {
-                    const stats = result.data;
-                    document.getElementById('stats').innerHTML = `
-                        <div class="stat-card">
-                            <div class="stat-number">${stats.vms.online || 0}</div>
-                            <div>在線VM</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">${stats.total_vms || 0}</div>
-                            <div>總VM數</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">${stats.tasks.running || 0}</div>
-                            <div>運行中任務</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-number">${stats.today_tasks || 0}</div>
-                            <div>今日任務</div>
-                        </div>
-                    `;
-                } else {
-                    document.getElementById('stats').innerHTML = '<div class="error">載入統計數據失敗</div>';
-                }
-            } catch (error) {
-                document.getElementById('stats').innerHTML = '<div class="error">載入統計數據失敗</div>';
-            }
-        }
-
-        // 載入VM列表
-        async function loadVms() {
-            try {
-                const response = await fetch('/api/vms');
-                const result = await response.json();
-                
-                if (result.success) {
-                    const vms = result.data;
-                    if (vms.length === 0) {
-                        document.getElementById('vmsList').innerHTML = '<p>暫無在線VM</p>';
-                        return;
-                    }
-                    
-                    let html = '<table><thead><tr><th>VM ID</th><th>IP地址</th><th>主機名</th><th>狀態</th><th>最後心跳</th></tr></thead><tbody>';
-                    vms.forEach(vm => {
-                        const lastHeartbeat = vm.last_heartbeat ? new Date(vm.last_heartbeat).toLocaleString() : '無';
-                        html += `
-                            <tr>
-                                <td>${vm.vm_id}</td>
-                                <td>${vm.ip_address}</td>
-                                <td>${vm.hostname || '未知'}</td>
-                                <td><span class="status ${vm.status}">${vm.status === 'online' ? '在線' : '離線'}</span></td>
-                                <td>${lastHeartbeat}</td>
-                            </tr>
-                        `;
-                    });
-                    html += '</tbody></table>';
-                    document.getElementById('vmsList').innerHTML = html;
-                } else {
-                    document.getElementById('vmsList').innerHTML = '<div class="error">載入VM列表失敗</div>';
-                }
-            } catch (error) {
-                document.getElementById('vmsList').innerHTML = '<div class="error">載入VM列表失敗</div>';
-            }
-        }
-
-        // 載入任務列表
-        async function loadTasks() {
-            try {
-                const response = await fetch('/api/tasks?limit=20');
-                const result = await response.json();
-                
-                if (result.success) {
-                    const tasks = result.data;
-                    if (tasks.length === 0) {
-                        document.getElementById('tasksList').innerHTML = '<p>暫無任務記錄</p>';
-                        return;
-                    }
-                    
-                    let html = '<table><thead><tr><th>任務ID</th><th>目標</th><th>類型</th><th>狀態</th><th>VM數量</th><th>創建時間</th><th>操作</th></tr></thead><tbody>';
-                    tasks.forEach(task => {
-                        const createdAt = new Date(task.created_at).toLocaleString();
-                        const vmCount = task.assigned_vms.length;
-                        const statusText = {
-                            'pending': '等待中',
-                            'running': '運行中',
-                            'completed': '已完成',
-                            'failed': '失敗'
-                        }[task.status] || task.status;
-                        
-                        html += `
-                            <tr>
-                                <td>${task.task_id.substring(0, 8)}...</td>
-                                <td>${task.target_ip}:${task.target_port}</td>
-                                <td>${task.test_type}</td>
-                                <td><span class="status ${task.status}">${statusText}</span></td>
-                                <td>${vmCount}</td>
-                                <td>${createdAt}</td>
-                                <td>
-                                    <button onclick="viewTaskResults('${task.task_id}')" style="background: #27ae60; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">查看結果</button>
-                                </td>
-                            </tr>
-                        `;
-                    });
-                    html += '</tbody></table>';
-                    document.getElementById('tasksList').innerHTML = html;
-                } else {
-                    document.getElementById('tasksList').innerHTML = '<div class="error">載入任務列表失敗</div>';
-                }
-            } catch (error) {
-                document.getElementById('tasksList').innerHTML = '<div class="error">載入任務列表失敗</div>';
-            }
-        }
-
-        // 創建任務
-        async function createTask(event) {
-            event.preventDefault();
-            
-            const startBtn = document.getElementById('startTestBtn');
-            startBtn.disabled = true;
-            startBtn.textContent = '創建中...';
-            
-            try {
-                const formData = new FormData(event.target);
-                const data = Object.fromEntries(formData.entries());
-                
-                // 處理VM列表
-                if (data.assigned_vms.trim()) {
-                    data.assigned_vms = data.assigned_vms.trim().split('\\n').filter(vm => vm.trim());
-                } else {
-                    delete data.assigned_vms;
-                }
-                
-                // 轉換數值類型
-                data.target_port = parseInt(data.target_port);
-                data.packet_size = parseInt(data.packet_size);
-                data.connection_count = parseInt(data.connection_count);
-                data.duration = parseInt(data.duration);
-                
-                const response = await fetch('/api/tasks/create', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(data)
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    showMessage('任務創建成功！', 'success');
-                    event.target.reset();
-                    loadTasks();
-                    loadStats();
-                } else {
-                    showMessage('任務創建失敗: ' + result.message, 'error');
-                }
-            } catch (error) {
-                showMessage('任務創建失敗: ' + error.message, 'error');
-            } finally {
-                startBtn.disabled = false;
-                startBtn.textContent = '🎯 開始測試';
-            }
-        }
-
-        // 查看任務結果
-        async function viewTaskResults(taskId) {
-            try {
-                const response = await fetch(`/api/tasks/${taskId}/results`);
-                const result = await response.json();
-                
-                if (result.success) {
-                    const results = result.data;
-                    let html = `
-                        <div style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; display: flex; align-items: center; justify-content: center;">
-                            <div style="background: white; padding: 20px; border-radius: 10px; max-width: 800px; width: 90%; max-height: 80%; overflow-y: auto;">
-                                <h3>任務結果 - ${taskId.substring(0, 8)}...</h3>
-                                <button onclick="this.parentElement.parentElement.remove()" style="float: right; background: #e74c3c; color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;">關閉</button>
-                                <table style="margin-top: 20px;">
-                                    <thead>
-                                        <tr>
-                                            <th>VM ID</th>
-                                            <th>狀態</th>
-                                            <th>發送包</th>
-                                            <th>接收包</th>
-                                            <th>丟包率</th>
-                                            <th>平均響應時間</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                    `;
-                    
-                    results.forEach(res => {
-                        const statusText = {
-                            'pending': '等待中',
-                            'running': '運行中',
-                            'completed': '已完成',
-                            'failed': '失敗'
-                        }[res.status] || res.status;
-                        
-                        html += `
-                            <tr>
-                                <td>${res.vm_id}</td>
-                                <td><span class="status ${res.status}">${statusText}</span></td>
-                                <td>${res.packets_sent || 0}</td>
-                                <td>${res.packets_received || 0}</td>
-                                <td>${res.packet_loss_rate || 0}%</td>
-                                <td>${res.avg_response_time || 0}ms</td>
-                            </tr>
-                        `;
-                    });
-                    
-                    html += '</tbody></table></div></div>';
-                    document.body.insertAdjacentHTML('beforeend', html);
-                } else {
-                    showMessage('載入任務結果失敗: ' + result.message, 'error');
-                }
-            } catch (error) {
-                showMessage('載入任務結果失敗: ' + error.message, 'error');
-            }
-        }
-
-        // 顯示消息
-        function showMessage(message, type) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = type;
-            messageDiv.textContent = message;
-            messageDiv.style.position = 'fixed';
-            messageDiv.style.top = '20px';
-            messageDiv.style.right = '20px';
-            messageDiv.style.zIndex = '1001';
-            messageDiv.style.minWidth = '300px';
-            
-            document.body.appendChild(messageDiv);
-            
-            setTimeout(() => {
-                messageDiv.remove();
-            }, 5000);
-        }
-
-        // 頁面卸載時清理定時器
-        window.addEventListener('beforeunload', function() {
-            refreshIntervals.forEach(interval => clearInterval(interval));
-        });
-    </script>
-</body>
-</html>
-    ''')
+@app.route('/api/tasks/<task_id>/stop', methods=['POST'])
+def stop_task(task_id):
+    """停止指定任務"""
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return jsonify({'status': 'error', 'error': '資料庫連接失敗'}), 500
+        
+        cursor = conn.cursor()
+        
+        # 檢查任務是否存在
+        cursor.execute("SELECT status FROM tasks WHERE task_id = %s", (task_id,))
+        task = cursor.fetchone()
+        
+        if not task:
+            return jsonify({'status': 'error', 'error': '任務不存在'}), 404
+        
+        if task[0] not in ['pending', 'running']:
+            return jsonify({'status': 'error', 'error': '任務無法停止'}), 400
+        
+        # 更新任務狀態為stopped
+        cursor.execute("UPDATE tasks SET status = 'stopped' WHERE task_id = %s", (task_id,))
+        cursor.execute("UPDATE vm_tasks SET status = 'stopped' WHERE task_id = %s", (task_id,))
+        cursor.execute("UPDATE task_results SET status = 'stopped' WHERE task_id = %s", (task_id,))
+        
+        conn.close()
+        
+        logger.info(f"任務 {task_id} 已停止")
+        return jsonify({'status': 'success', 'message': '任務已停止'})
+        
+    except Exception as e:
+        logger.error(f"停止任務錯誤: {e}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 if __name__ == '__main__':
     logger.info(f"啟動API服務器，端口: {API_PORT}")
